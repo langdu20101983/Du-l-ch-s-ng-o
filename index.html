@@ -9,7 +9,7 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <style>
-    body { font-family: 'Inter', sans-serif; margin: 0; padding: 0; }
+    body { font-family: 'Inter', sans-serif; margin: 0; padding: 0; background-color: #f9fafb; }
     #root { min-height: 100vh; }
     .glass { background: rgba(255, 255, 255, 0.8); backdrop-filter: blur(12px); }
     @keyframes loading {
@@ -21,8 +21,13 @@
     .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
   </style>
   <script>
-    // Giả lập biến process để tránh lỗi trên trình duyệt khi SDK hoặc code gọi process.env
-    window.process = { env: { API_KEY: "" } };
+    // Shim process.env ngay lập tức cho môi trường trình duyệt
+    window.process = { 
+      env: { 
+        NODE_ENV: 'production',
+        API_KEY: '' 
+      } 
+    };
   </script>
   <script type="importmap">
 {
@@ -37,7 +42,7 @@
 }
 </script>
 </head>
-<body class="bg-gray-50 text-gray-900">
+<body>
   <div id="root"></div>
   <script type="module" src="index.tsx"></script>
 </body>
