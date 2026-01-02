@@ -1,0 +1,8 @@
+{
+  "name": "Global Wander AI",
+  "description": "A premium travel destination explorer and AI-powered selfie generator. Discover famous landmarks and use advanced Gemini models to realistically blend your face into your dream travel locations.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ]
+}
