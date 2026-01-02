@@ -1,17 +1,21 @@
 
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Type } from "@google/genai";
 import { AspectRatio, ClothingStyle, ImageQuality, Destination, Region, TravelType } from "../types";
 
-// Hàm lấy API Key an toàn từ môi trường Vercel hoặc AI Studio injection
-const getApiKey = () => {
-  return process.env.API_KEY || (window as any).process?.env?.API_KEY || "";
+/**
+ * Khởi tạo instance AI mới mỗi khi gọi hàm để đảm bảo lấy được API Key mới nhất
+ * từ môi trường (đặc biệt quan trọng khi dùng aistudio.openSelectKey)
+ */
+const getAIClient = () => {
+  const apiKey = process.env.API_KEY || "";
+  return new GoogleGenAI({ apiKey });
 };
 
 export const checkApiKeyStatus = async (): Promise<boolean> => {
   if (typeof (window as any).aistudio?.hasSelectedApiKey === 'function') {
     return await (window as any).aistudio.hasSelectedApiKey();
   }
-  return !!getApiKey();
+  return !!process.env.API_KEY;
 };
 
 export const openApiKeySelector = async (): Promise<void> => {
@@ -29,70 +33,75 @@ export const searchGlobalDestinations = async (
   query: string, 
   location?: { latitude: number, longitude: number }
 ): Promise<Destination[]> => {
-  const apiKey = getApiKey();
-  if (!apiKey) {
-    throw new Error("API Key is missing. Please configure it in your environment.");
-  }
-
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = getAIClient();
   
-  // 'gemini-2.5-flash' là model chuẩn hỗ trợ Maps Grounding
-  const modelName = 'gemini-2.5-flash';
+  // Sử dụng Gemini 3 Flash cho tốc độ và khả năng tuân thủ cấu trúc JSON tốt hơn
+  const modelName = 'gemini-3-flash-preview';
 
-  const prompt = `Find 5 famous and visually stunning tourist landmarks for the search query: "${query}". 
-    For each landmark, provide the following information in a valid JSON array format:
-    - name: string
-    - country: string
-    - region: "Europe", "Asia", "Americas", "Africa", or "Oceania"
-    - type: "Cultural", "Adventure", "Nature", "Urban", or "Relaxation"
-    - description: a short, vivid description
-    - checkIns: a realistic estimated number of annual visitors
-    - image: a representative image search keyword.
+  const prompt = `Bạn là một chuyên gia du lịch. Hãy tìm 5 địa danh du lịch nổi tiếng và đẹp nhất phù hợp với từ khóa: "${query}".
+    Yêu cầu trả về danh sách dưới định dạng JSON array với cấu trúc sau cho mỗi địa điểm:
+    {
+      "name": "Tên địa danh",
+      "country": "Quốc gia",
+      "region": "Europe" | "Asia" | "Americas" | "Africa" | "Oceania",
+      "type": "Cultural" | "Adventure" | "Nature" | "Urban" | "Relaxation",
+      "description": "Mô tả ngắn gọn, hấp dẫn bằng tiếng Việt",
+      "checkIns": số lượng khách tham quan ước tính hàng năm (number)
+    }
 
-    IMPORTANT: Return ONLY the JSON array. Do not include markdown formatting.`;
+    Chỉ trả về duy nhất mảng JSON, không kèm giải thích hay markdown.`;
 
   try {
     const response = await ai.models.generateContent({
       model: modelName,
       contents: prompt,
       config: {
-        tools: [{ googleMaps: {} }, { googleSearch: {} }],
-        toolConfig: location ? {
-          retrievalConfig: {
-            latLng: location
+        tools: [{ googleSearch: {} }],
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              name: { type: Type.STRING },
+              country: { type: Type.STRING },
+              region: { type: Type.STRING },
+              type: { type: Type.STRING },
+              description: { type: Type.STRING },
+              checkIns: { type: Type.NUMBER }
+            },
+            required: ["name", "country", "region", "type", "description", "checkIns"]
           }
-        } : undefined
+        }
       }
     });
 
-    const text = response.text || "";
-    const jsonMatch = text.match(/\[[\s\S]*\]/);
-    const jsonString = jsonMatch ? jsonMatch[0] : text;
-    const raw = JSON.parse(jsonString);
-    
-    const grounding = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
-    
-    return raw.map((item: any, idx: number) => {
-      // Tìm kiếm link bản đồ từ dữ liệu grounding
-      const mapLink = grounding.find((chunk: any) => chunk.maps?.title?.toLowerCase().includes(item.name.toLowerCase()))?.maps?.uri;
-      const webLink = grounding.find((chunk: any) => chunk.web?.title?.toLowerCase().includes(item.name.toLowerCase()))?.web?.uri;
+    const results = JSON.parse(response.text || "[]");
+    const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+
+    return results.map((item: any, idx: number) => {
+      // Tìm link tham khảo từ grounding nếu có
+      const sourceUrl = groundingChunks.find((chunk: any) => 
+        chunk.web?.title?.toLowerCase().includes(item.name.toLowerCase()) ||
+        chunk.web?.uri?.toLowerCase().includes(item.name.toLowerCase().replace(/\s+/g, '-'))
+      )?.web?.uri;
 
       return {
         id: `global-${idx}-${Date.now()}`,
         name: item.name,
         country: item.country,
-        region: (Object.values(Region).includes(item.region as any) ? item.region : Region.EUROPE) as Region,
+        region: (Object.values(Region).includes(item.region as any) ? item.region : Region.ASIA) as Region,
         type: (Object.values(TravelType).includes(item.type as any) ? item.type : TravelType.CULTURAL) as TravelType,
         image: `https://source.unsplash.com/featured/?${encodeURIComponent(item.name + ' landmark')}`,
         description: item.description,
         checkIns: item.checkIns || 1000000,
         isGlobal: true,
-        sourceUrl: mapLink || webLink || `https://www.google.com/maps/search/${encodeURIComponent(item.name + ' ' + item.country)}`
+        sourceUrl: sourceUrl || `https://www.google.com/search?q=${encodeURIComponent(item.name + ' ' + item.country)}`
       };
     });
   } catch (e) {
-    console.error("Gemini Search Error:", e);
-    throw new Error("Failed to call the Gemini API. Please check your API key or network.");
+    console.error("Gemini API Error:", e);
+    throw new Error("Không thể kết nối với Gemini API. Vui lòng kiểm tra lại cấu hình hoặc thử lại sau.");
   }
 };
 
@@ -109,18 +118,18 @@ export const generateSelfie = async (
   const isHighQuality = quality === ImageQuality.Q2K || quality === ImageQuality.Q4K;
   const modelName = isHighQuality ? 'gemini-3-pro-image-preview' : 'gemini-2.5-flash-image';
   
-  const apiKey = getApiKey();
-  const ai = new GoogleGenAI({ apiKey });
+  const ai = getAIClient();
   
   const parts: any[] = [
     { 
-      text: `A professional travel photograph at ${destinationName}. 
-      Subject: Accurate representation of the faces provided.
-      Outfit: ${outfitStyle} style.
-      Scene: Cinematic lighting, realistic blending.
-      ${celebrityName ? `Including ${celebrityName} next to the person.` : ''}
-      Aspect ratio: ${aspectRatio}.
-      ${customPrompt ? `Notes: ${customPrompt}` : ''}` 
+      text: `Create a highly realistic travel selfie of the person in the provided photos at ${destinationName}. 
+      The subject should have exactly the same facial features as the reference images.
+      Clothing Style: ${outfitStyle}. 
+      ${outfitImages.length > 0 ? "Use the provided outfit references for clothing details." : ""}
+      ${celebrityName ? `Subject is taking a selfie with ${celebrityName}.` : ""}
+      Scene: Professional travel photography, natural lighting, sharp focus on faces.
+      Aspect Ratio: ${aspectRatio}.
+      ${customPrompt ? `Additional details: ${customPrompt}` : ""}` 
     },
   ];
 
@@ -134,26 +143,33 @@ export const generateSelfie = async (
     parts.push({ inlineData: { data: cleanData, mimeType: getMimeType(imgBase64) } });
   });
 
-  const response = await ai.models.generateContent({
-    model: modelName,
-    contents: { parts },
-    config: {
-      imageConfig: {
-        aspectRatio: aspectRatio as any,
-        imageSize: isHighQuality ? quality as any : undefined
+  try {
+    const response = await ai.models.generateContent({
+      model: modelName,
+      contents: { parts },
+      config: {
+        imageConfig: {
+          aspectRatio: aspectRatio as any,
+          imageSize: isHighQuality ? quality as any : undefined
+        }
+      }
+    });
+
+    if (!response.candidates || response.candidates.length === 0) {
+      throw new Error("Không nhận được phản hồi từ AI.");
+    }
+
+    for (const part of response.candidates[0].content.parts) {
+      if (part.inlineData) {
+        return `data:image/png;base64,${part.inlineData.data}`;
       }
     }
-  });
 
-  if (!response.candidates || response.candidates.length === 0) {
-    throw new Error("No response from the AI model.");
-  }
-
-  for (const part of response.candidates[0].content.parts) {
-    if (part.inlineData) {
-      return `data:image/png;base64,${part.inlineData.data}`;
+    throw new Error("AI không tạo được hình ảnh. Có thể do vi phạm chính sách nội dung.");
+  } catch (e: any) {
+    if (e.message?.includes("entity was not found")) {
+      throw new Error("API Key không hợp lệ hoặc không có quyền truy cập model này.");
     }
+    throw e;
   }
-
-  throw new Error("Image generation failed.");
 };
