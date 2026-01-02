@@ -24,7 +24,6 @@
     // Cung cấp shim process.env cho SDK Gemini và các module ESM
     window.process = window.process || { env: {} };
     window.process.env = window.process.env || {};
-    // API_KEY sẽ được hệ thống inject tự động vào process.env.API_KEY
   </script>
   <script type="importmap">
 {

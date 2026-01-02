@@ -22,6 +22,7 @@ const App: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [globalResults, setGlobalResults] = useState<Destination[]>([]);
   const [isSearchingGlobal, setIsSearchingGlobal] = useState(false);
+  const [lastGlobalQuery, setLastGlobalQuery] = useState('');
 
   // Generation states
   const [selectedDest, setSelectedDest] = useState<Destination | null>(null);
@@ -52,10 +53,13 @@ const App: React.FC = () => {
       });
   }, [selectedRegion, selectedType, searchQuery]);
 
-  const handleGlobalSearch = async () => {
-    if (!searchQuery.trim()) return;
+  const handleGlobalSearch = async (queryToSearch: string = searchQuery) => {
+    if (!queryToSearch.trim() || isSearchingGlobal) return;
+    if (queryToSearch.trim() === lastGlobalQuery) return; // Tránh tìm kiếm trùng lặp
+
     setIsSearchingGlobal(true);
     setError(null);
+    setLastGlobalQuery(queryToSearch.trim());
     
     let location: { latitude: number, longitude: number } | undefined;
     try {
@@ -68,12 +72,13 @@ const App: React.FC = () => {
     }
 
     try {
-      const results = await searchGlobalDestinations(searchQuery, location);
+      const results = await searchGlobalDestinations(queryToSearch, location);
       setGlobalResults(results);
       if (results.length > 0) {
-        setSelectedDest(results[0]);
-      } else {
-        setError("No global results found. Try a broader search term.");
+        // Chỉ tự động chọn nếu chưa có địa điểm nào được chọn
+        if (!selectedDest) setSelectedDest(results[0]);
+      } else if (rankedDestinations.length === 0) {
+        setError("Không tìm thấy kết quả nào. Hãy thử từ khóa khác.");
       }
     } catch (err: any) {
       setError(t.errorGeneral);
@@ -81,6 +86,25 @@ const App: React.FC = () => {
       setIsSearchingGlobal(false);
     }
   };
+
+  // Auto-search effect
+  useEffect(() => {
+    // Reset global results if query is empty
+    if (!searchQuery.trim()) {
+      setGlobalResults([]);
+      setLastGlobalQuery('');
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      // Trigger global search if local results are empty and query is long enough
+      if (searchQuery.trim().length >= 3 && rankedDestinations.length === 0 && !isSearchingGlobal) {
+        handleGlobalSearch(searchQuery);
+      }
+    }, 800); // 800ms debounce
+
+    return () => clearTimeout(timer);
+  }, [searchQuery, rankedDestinations.length]);
 
   const handleGenerate = async () => {
     if (!selectedDest) {
@@ -278,22 +302,27 @@ const App: React.FC = () => {
               <div className="relative flex-1">
                 <i className="fa-solid fa-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 text-gray-400"></i>
                 <input type="text" placeholder={t.searchPlaceholder} className="w-full pl-12 pr-4 py-3 bg-white border border-gray-200 rounded-2xl shadow-sm outline-none" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
+                {isSearchingGlobal && (
+                   <div className="absolute right-4 top-1/2 -translate-y-1/2">
+                     <i className="fa-solid fa-circle-notch animate-spin text-indigo-500"></i>
+                   </div>
+                )}
               </div>
               <button 
-                onClick={handleGlobalSearch} 
+                onClick={() => handleGlobalSearch()} 
                 disabled={isSearchingGlobal || !searchQuery}
-                className="px-6 py-3 bg-indigo-600 text-white font-bold rounded-2xl hover:bg-indigo-700 disabled:bg-gray-300 transition-all flex items-center gap-2"
+                className="px-6 py-3 bg-indigo-600 text-white font-bold rounded-2xl hover:bg-indigo-700 disabled:bg-gray-300 transition-all flex items-center gap-2 shadow-lg"
               >
                 {isSearchingGlobal ? <i className="fa-solid fa-circle-notch animate-spin"></i> : <i className="fa-solid fa-globe"></i>}
                 {t.searchGlobalBtn}
               </button>
             </div>
             <div className="flex gap-2">
-              <select className="px-4 py-2 bg-white border rounded-xl" value={selectedRegion} onChange={(e) => setSelectedRegion(e.target.value as any)}>
+              <select className="px-4 py-2 bg-white border border-gray-200 rounded-xl text-sm font-medium shadow-sm outline-none focus:ring-2 focus:ring-indigo-500/20" value={selectedRegion} onChange={(e) => setSelectedRegion(e.target.value as any)}>
                 <option value="All">{t.allRegions}</option>
                 {Object.values(Region).map(r => <option key={r} value={r}>{t.regions[r]}</option>)}
               </select>
-              <select className="px-4 py-2 bg-white border rounded-xl" value={selectedType} onChange={(e) => setSelectedType(e.target.value as any)}>
+              <select className="px-4 py-2 bg-white border border-gray-200 rounded-xl text-sm font-medium shadow-sm outline-none focus:ring-2 focus:ring-indigo-500/20" value={selectedType} onChange={(e) => setSelectedType(e.target.value as any)}>
                 <option value="All">{t.allTypes}</option>
                 {Object.values(TravelType).map(tt => <option key={tt} value={tt}>{t.types[tt]}</option>)}
               </select>
@@ -302,11 +331,11 @@ const App: React.FC = () => {
         </div>
 
         {/* Dynamic Global Results */}
-        {globalResults.length > 0 && (
-          <section className="mb-12 p-6 bg-indigo-50/50 rounded-3xl border border-indigo-100">
+        {(globalResults.length > 0 || isSearchingGlobal) && (
+          <section className="mb-12 p-6 bg-indigo-50/50 rounded-3xl border border-indigo-100 transition-all">
             <h2 className="text-xl font-black mb-6 flex items-center gap-2 text-indigo-900">
-              <i className="fa-solid fa-map-pin text-red-500 animate-bounce"></i>
-              {t.globalResultsTitle}
+              <i className={`fa-solid ${isSearchingGlobal ? 'fa-circle-notch animate-spin' : 'fa-map-pin text-red-500 animate-bounce'}`}></i>
+              {isSearchingGlobal ? 'Đang tự động tìm kiếm toàn cầu...' : t.globalResultsTitle}
             </h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
               {globalResults.map(dest => (
@@ -318,6 +347,13 @@ const App: React.FC = () => {
                   t={t} 
                 />
               ))}
+              {isSearchingGlobal && globalResults.length === 0 && (
+                Array(5).fill(0).map((_, i) => (
+                  <div key={i} className="aspect-[4/3] bg-indigo-100/50 rounded-2xl animate-pulse flex items-center justify-center">
+                    <i className="fa-solid fa-image text-indigo-200 text-3xl"></i>
+                  </div>
+                ))
+              )}
             </div>
           </section>
         )}
@@ -330,7 +366,11 @@ const App: React.FC = () => {
               <div key={dest.id} className="min-w-[280px] sm:min-w-[340px] snap-start">
                 <DestinationCard destination={dest} isSelected={selectedDest?.id === dest.id} onSelect={setSelectedDest} t={t} rank={idx} />
               </div>
-            )) : <div className="p-12 text-center w-full text-gray-400 italic">{t.noDestinations}</div>}
+            )) : !isSearchingGlobal && globalResults.length === 0 && (
+              <div className="p-12 text-center w-full text-gray-400 italic">
+                {t.noDestinations}
+              </div>
+            )}
           </div>
         </div>
       </main>
