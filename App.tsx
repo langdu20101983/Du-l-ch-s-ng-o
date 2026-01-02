@@ -35,7 +35,6 @@ const App: React.FC = () => {
   const [isSuggestingCelebrity, setIsSuggestingCelebrity] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
   
-  // Ref để theo dõi tên đã chọn để tránh lặp lại gợi ý ngay lập tức
   const lastSelectedCelebrity = useRef<string>('');
   
   const [customPrompt, setCustomPrompt] = useState('');
@@ -63,13 +62,11 @@ const App: React.FC = () => {
   // Debounce gợi ý người nổi tiếng
   useEffect(() => {
     const timer = setTimeout(async () => {
-      // Nếu tên hiện tại giống hệt tên vừa chọn, hoặc quá ngắn, hoặc đang tạo ảnh thì không gợi ý
       if (celebrityName.length >= 2 && !isGenerating && celebrityName !== lastSelectedCelebrity.current) {
         setIsSuggestingCelebrity(true);
         const suggestions = await getCelebritySuggestions(celebrityName, lang);
         setCelebritySuggestions(suggestions);
         setIsSuggestingCelebrity(false);
-        // Chỉ hiển thị nếu danh sách không rỗng và người dùng vẫn đang tập trung vào ô đó
         setShowSuggestions(suggestions.length > 0);
       } else {
         setCelebritySuggestions([]);
@@ -83,6 +80,13 @@ const App: React.FC = () => {
   const handleGlobalSearch = async (queryToSearch: string = searchQuery) => {
     if (!queryToSearch.trim() || isSearchingGlobal) return;
     if (queryToSearch.trim() === lastGlobalQuery) return;
+
+    // Kiểm tra API Key trước khi tìm kiếm
+    const hasKey = await checkApiKeyStatus();
+    if (!hasKey) {
+      await openApiKeySelector();
+      // Proceed assuming success as per instructions
+    }
 
     setIsSearchingGlobal(true);
     setError(null);
@@ -105,7 +109,11 @@ const App: React.FC = () => {
         setSelectedDest(results[0]);
       }
     } catch (err: any) {
-      setError(t.errorGeneral);
+      if (err.message === "KEY_MISSING") {
+        setError(t.errorAuth);
+      } else {
+        setError(t.errorGeneral);
+      }
     } finally {
       setIsSearchingGlobal(false);
     }
@@ -134,9 +142,11 @@ const App: React.FC = () => {
       setError(t.errorNoFace);
       return;
     }
-    if (imageQuality !== ImageQuality.Q1K) {
-      const hasKey = await checkApiKeyStatus();
-      if (!hasKey) await openApiKeySelector();
+
+    // Luôn kiểm tra Key khi bắt đầu tạo ảnh
+    const hasKey = await checkApiKeyStatus();
+    if (!hasKey) {
+      await openApiKeySelector();
     }
 
     setIsGenerating(true);
@@ -160,7 +170,12 @@ const App: React.FC = () => {
       ]);
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (err: any) {
-      setError(err.message || t.errorGeneral);
+      if (err.message === "ENTITY_NOT_FOUND" || err.message === "KEY_MISSING") {
+        setError(t.errorAuth);
+        await openApiKeySelector();
+      } else {
+        setError(err.message || t.errorGeneral);
+      }
     } finally {
       setIsGenerating(false);
     }
@@ -245,7 +260,6 @@ const App: React.FC = () => {
                     value={celebrityName} 
                     onChange={(e) => {
                       setCelebrityName(e.target.value);
-                      // Khi người dùng gõ phím, reset tên đã chọn để cho phép gợi ý lại
                       lastSelectedCelebrity.current = '';
                     }}
                     onFocus={() => celebritySuggestions.length > 0 && celebrityName !== lastSelectedCelebrity.current && setShowSuggestions(true)}
@@ -263,7 +277,7 @@ const App: React.FC = () => {
                         key={idx}
                         onClick={() => {
                           setCelebrityName(name);
-                          lastSelectedCelebrity.current = name; // Lưu tên đã chọn
+                          lastSelectedCelebrity.current = name;
                           setShowSuggestions(false);
                           setCelebritySuggestions([]);
                         }}

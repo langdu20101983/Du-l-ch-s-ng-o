@@ -4,9 +4,13 @@ import { AspectRatio, ClothingStyle, ImageQuality, Destination, Region, TravelTy
 
 /**
  * Khởi tạo instance AI mới mỗi khi gọi hàm để đảm bảo lấy được API Key mới nhất
+ * (đặc biệt quan trọng sau khi người dùng thực hiện openSelectKey)
  */
 const getAIClient = () => {
-  const apiKey = process.env.API_KEY || "";
+  const apiKey = process.env.API_KEY;
+  if (!apiKey) {
+    throw new Error("KEY_MISSING");
+  }
   return new GoogleGenAI({ apiKey });
 };
 
@@ -34,15 +38,15 @@ const getMimeType = (base64: string) => {
 export const getCelebritySuggestions = async (query: string, lang: string): Promise<string[]> => {
   if (!query || query.length < 2) return [];
   
-  const ai = getAIClient();
-  const modelName = 'gemini-3-flash-preview';
-
-  const prompt = `Bạn là một chuyên gia văn hóa đại chúng. Hãy gợi ý 5 tên người nổi tiếng (diễn viên, ca sĩ, vận động viên, nhân vật hư cấu nổi tiếng) bắt đầu bằng hoặc liên quan đến từ khóa: "${query}".
-    Ưu tiên các nhân vật phổ biến với người dùng nói tiếng ${lang === 'vi' ? 'Việt' : 'Anh'}.
-    Yêu cầu trả về danh sách dưới định dạng JSON array của các chuỗi (strings).
-    Chỉ trả về JSON, không giải thích.`;
-
   try {
+    const ai = getAIClient();
+    const modelName = 'gemini-3-flash-preview';
+
+    const prompt = `Bạn là một chuyên gia văn hóa đại chúng. Hãy gợi ý 5 tên người nổi tiếng (diễn viên, ca sĩ, vận động viên, nhân vật hư cấu nổi tiếng) bắt đầu bằng hoặc liên quan đến từ khóa: "${query}".
+      Ưu tiên các nhân vật phổ biến với người dùng nói tiếng ${lang === 'vi' ? 'Việt' : 'Anh'}.
+      Yêu cầu trả về danh sách dưới định dạng JSON array của các chuỗi (strings).
+      Chỉ trả về JSON, không giải thích.`;
+
     const response = await ai.models.generateContent({
       model: modelName,
       contents: prompt,
@@ -56,8 +60,8 @@ export const getCelebritySuggestions = async (query: string, lang: string): Prom
     });
 
     return JSON.parse(response.text || "[]");
-  } catch (e) {
-    console.error("Suggestion Error:", e);
+  } catch (e: any) {
+    console.debug("Suggestion suppressed or key missing");
     return [];
   }
 };
@@ -66,22 +70,22 @@ export const searchGlobalDestinations = async (
   query: string, 
   location?: { latitude: number, longitude: number }
 ): Promise<Destination[]> => {
-  const ai = getAIClient();
-  const modelName = 'gemini-3-flash-preview';
-
-  const prompt = `Bạn là một chuyên gia du lịch. Hãy tìm 5 địa danh du lịch nổi tiếng và đẹp nhất phù hợp với từ khóa: "${query}".
-    Yêu cầu trả về danh sách dưới định dạng JSON array với cấu trúc sau cho mỗi địa điểm:
-    {
-      "name": "Tên địa danh",
-      "country": "Quốc gia",
-      "region": "Europe" | "Asia" | "Americas" | "Africa" | "Oceania",
-      "type": "Cultural" | "Adventure" | "Nature" | "Urban" | "Relaxation",
-      "description": "Mô tả ngắn gọn, hấp dẫn bằng tiếng Việt",
-      "checkIns": số lượng khách tham quan ước tính hàng năm (number)
-    }
-    Chỉ trả về duy nhất mảng JSON, không kèm giải thích hay markdown.`;
-
   try {
+    const ai = getAIClient();
+    const modelName = 'gemini-3-flash-preview';
+
+    const prompt = `Bạn là một chuyên gia du lịch. Hãy tìm 5 địa danh du lịch nổi tiếng và đẹp nhất phù hợp với từ khóa: "${query}".
+      Yêu cầu trả về danh sách dưới định dạng JSON array với cấu trúc sau cho mỗi địa điểm:
+      {
+        "name": "Tên địa danh",
+        "country": "Quốc gia",
+        "region": "Europe" | "Asia" | "Americas" | "Africa" | "Oceania",
+        "type": "Cultural" | "Adventure" | "Nature" | "Urban" | "Relaxation",
+        "description": "Mô tả ngắn gọn, hấp dẫn bằng tiếng Việt",
+        "checkIns": số lượng khách tham quan ước tính hàng năm (number)
+      }
+      Chỉ trả về duy nhất mảng JSON, không kèm giải thích hay markdown.`;
+
     const response = await ai.models.generateContent({
       model: modelName,
       contents: prompt,
@@ -128,9 +132,9 @@ export const searchGlobalDestinations = async (
         sourceUrl: sourceUrl || `https://www.google.com/search?q=${encodeURIComponent(item.name + ' ' + item.country)}`
       };
     });
-  } catch (e) {
-    console.error("Gemini API Error:", e);
-    throw new Error("Không thể kết nối với Gemini API. Vui lòng kiểm tra lại cấu hình hoặc thử lại sau.");
+  } catch (e: any) {
+    if (e.message === "KEY_MISSING") throw e;
+    throw new Error("Không thể kết nối với Gemini. Vui lòng kiểm tra API Key.");
   }
 };
 
@@ -146,31 +150,32 @@ export const generateSelfie = async (
 ): Promise<string> => {
   const isHighQuality = quality === ImageQuality.Q2K || quality === ImageQuality.Q4K;
   const modelName = isHighQuality ? 'gemini-3-pro-image-preview' : 'gemini-2.5-flash-image';
-  const ai = getAIClient();
   
-  const parts: any[] = [
-    { 
-      text: `Create a highly realistic travel photograph at ${destinationName}. 
-      The person's face must exactly match the reference photos provided.
-      The person is wearing ${outfitStyle} clothing.
-      ${celebrityName ? `The person is posing for a selfie with ${celebrityName}. Both should look naturally integrated into the scene.` : ""}
-      Scene: High-end travel photography, natural cinematic lighting.
-      Aspect Ratio: ${aspectRatio}.
-      ${customPrompt ? `Note: ${customPrompt}` : ""}` 
-    },
-  ];
-
-  userImages.forEach((imgBase64) => {
-    const cleanData = imgBase64.replace(/^data:image\/[^;]+;base64,/, "");
-    parts.push({ inlineData: { data: cleanData, mimeType: getMimeType(imgBase64) } });
-  });
-
-  outfitImages.forEach((imgBase64) => {
-    const cleanData = imgBase64.replace(/^data:image\/[^;]+;base64,/, "");
-    parts.push({ inlineData: { data: cleanData, mimeType: getMimeType(imgBase64) } });
-  });
-
   try {
+    const ai = getAIClient();
+    
+    const parts: any[] = [
+      { 
+        text: `Create a highly realistic travel photograph at ${destinationName}. 
+        The person's face must exactly match the reference photos provided.
+        The person is wearing ${outfitStyle} clothing.
+        ${celebrityName ? `The person is posing for a selfie with ${celebrityName}. Both should look naturally integrated into the scene.` : ""}
+        Scene: High-end travel photography, natural cinematic lighting.
+        Aspect Ratio: ${aspectRatio}.
+        ${customPrompt ? `Note: ${customPrompt}` : ""}` 
+      },
+    ];
+
+    userImages.forEach((imgBase64) => {
+      const cleanData = imgBase64.replace(/^data:image\/[^;]+;base64,/, "");
+      parts.push({ inlineData: { data: cleanData, mimeType: getMimeType(imgBase64) } });
+    });
+
+    outfitImages.forEach((imgBase64) => {
+      const cleanData = imgBase64.replace(/^data:image\/[^;]+;base64,/, "");
+      parts.push({ inlineData: { data: cleanData, mimeType: getMimeType(imgBase64) } });
+    });
+
     const response = await ai.models.generateContent({
       model: modelName,
       contents: { parts },
@@ -194,6 +199,10 @@ export const generateSelfie = async (
 
     throw new Error("AI không tạo được hình ảnh.");
   } catch (e: any) {
+    if (e.message === "KEY_MISSING") throw e;
+    if (e.message?.includes("not found")) {
+      throw new Error("ENTITY_NOT_FOUND");
+    }
     throw e;
   }
 };
