@@ -2,11 +2,20 @@
 import { GoogleGenAI } from "@google/genai";
 import { AspectRatio, ClothingStyle, ImageQuality, Destination, Region, TravelType } from "../types";
 
+// Helper để lấy API Key an toàn
+const getApiKey = () => {
+  try {
+    return process.env.API_KEY || "";
+  } catch (e) {
+    return "";
+  }
+};
+
 export const checkApiKeyStatus = async (): Promise<boolean> => {
   if (typeof window.aistudio?.hasSelectedApiKey === 'function') {
     return await window.aistudio.hasSelectedApiKey();
   }
-  return false;
+  return !!getApiKey();
 };
 
 export const openApiKeySelector = async (): Promise<void> => {
@@ -24,10 +33,9 @@ export const searchGlobalDestinations = async (
   query: string, 
   location?: { latitude: number, longitude: number }
 ): Promise<Destination[]> => {
-  // Creating instance here to ensure fresh API key
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const apiKey = getApiKey();
+  const ai = new GoogleGenAI({ apiKey });
   
-  // Rule: Maps grounding only supported in Gemini 2.5 series.
   const modelName = 'gemini-2.5-flash-preview-09-2025';
 
   const prompt = `Find 5 famous and visually stunning tourist landmarks for the search query: "${query}". 
@@ -94,7 +102,8 @@ export const generateSelfie = async (
   const isHighQuality = quality === ImageQuality.Q2K || quality === ImageQuality.Q4K;
   const modelName = isHighQuality ? 'gemini-3-pro-image-preview' : 'gemini-2.5-flash-image';
   
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const apiKey = getApiKey();
+  const ai = new GoogleGenAI({ apiKey });
   
   const parts: any[] = [
     { 
