@@ -4,7 +4,6 @@ import { AspectRatio, ClothingStyle, ImageQuality, Destination, Region, TravelTy
 
 /**
  * Khởi tạo instance AI mới mỗi khi gọi hàm để đảm bảo lấy được API Key mới nhất
- * từ môi trường (đặc biệt quan trọng khi dùng aistudio.openSelectKey)
  */
 const getAIClient = () => {
   const apiKey = process.env.API_KEY || "";
@@ -29,13 +28,45 @@ const getMimeType = (base64: string) => {
   return match ? match[1] : 'image/jpeg';
 };
 
+/**
+ * Lấy gợi ý người nổi tiếng dựa trên từ khóa người dùng gõ
+ */
+export const getCelebritySuggestions = async (query: string, lang: string): Promise<string[]> => {
+  if (!query || query.length < 2) return [];
+  
+  const ai = getAIClient();
+  const modelName = 'gemini-3-flash-preview';
+
+  const prompt = `Bạn là một chuyên gia văn hóa đại chúng. Hãy gợi ý 5 tên người nổi tiếng (diễn viên, ca sĩ, vận động viên, nhân vật hư cấu nổi tiếng) bắt đầu bằng hoặc liên quan đến từ khóa: "${query}".
+    Ưu tiên các nhân vật phổ biến với người dùng nói tiếng ${lang === 'vi' ? 'Việt' : 'Anh'}.
+    Yêu cầu trả về danh sách dưới định dạng JSON array của các chuỗi (strings).
+    Chỉ trả về JSON, không giải thích.`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: modelName,
+      contents: prompt,
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.ARRAY,
+          items: { type: Type.STRING }
+        }
+      }
+    });
+
+    return JSON.parse(response.text || "[]");
+  } catch (e) {
+    console.error("Suggestion Error:", e);
+    return [];
+  }
+};
+
 export const searchGlobalDestinations = async (
   query: string, 
   location?: { latitude: number, longitude: number }
 ): Promise<Destination[]> => {
   const ai = getAIClient();
-  
-  // Sử dụng Gemini 3 Flash cho tốc độ và khả năng tuân thủ cấu trúc JSON tốt hơn
   const modelName = 'gemini-3-flash-preview';
 
   const prompt = `Bạn là một chuyên gia du lịch. Hãy tìm 5 địa danh du lịch nổi tiếng và đẹp nhất phù hợp với từ khóa: "${query}".
@@ -48,7 +79,6 @@ export const searchGlobalDestinations = async (
       "description": "Mô tả ngắn gọn, hấp dẫn bằng tiếng Việt",
       "checkIns": số lượng khách tham quan ước tính hàng năm (number)
     }
-
     Chỉ trả về duy nhất mảng JSON, không kèm giải thích hay markdown.`;
 
   try {
@@ -80,7 +110,6 @@ export const searchGlobalDestinations = async (
     const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
 
     return results.map((item: any, idx: number) => {
-      // Tìm link tham khảo từ grounding nếu có
       const sourceUrl = groundingChunks.find((chunk: any) => 
         chunk.web?.title?.toLowerCase().includes(item.name.toLowerCase()) ||
         chunk.web?.uri?.toLowerCase().includes(item.name.toLowerCase().replace(/\s+/g, '-'))
@@ -117,19 +146,17 @@ export const generateSelfie = async (
 ): Promise<string> => {
   const isHighQuality = quality === ImageQuality.Q2K || quality === ImageQuality.Q4K;
   const modelName = isHighQuality ? 'gemini-3-pro-image-preview' : 'gemini-2.5-flash-image';
-  
   const ai = getAIClient();
   
   const parts: any[] = [
     { 
-      text: `Create a highly realistic travel selfie of the person in the provided photos at ${destinationName}. 
-      The subject should have exactly the same facial features as the reference images.
-      Clothing Style: ${outfitStyle}. 
-      ${outfitImages.length > 0 ? "Use the provided outfit references for clothing details." : ""}
-      ${celebrityName ? `Subject is taking a selfie with ${celebrityName}.` : ""}
-      Scene: Professional travel photography, natural lighting, sharp focus on faces.
+      text: `Create a highly realistic travel photograph at ${destinationName}. 
+      The person's face must exactly match the reference photos provided.
+      The person is wearing ${outfitStyle} clothing.
+      ${celebrityName ? `The person is posing for a selfie with ${celebrityName}. Both should look naturally integrated into the scene.` : ""}
+      Scene: High-end travel photography, natural cinematic lighting.
       Aspect Ratio: ${aspectRatio}.
-      ${customPrompt ? `Additional details: ${customPrompt}` : ""}` 
+      ${customPrompt ? `Note: ${customPrompt}` : ""}` 
     },
   ];
 
@@ -165,11 +192,8 @@ export const generateSelfie = async (
       }
     }
 
-    throw new Error("AI không tạo được hình ảnh. Có thể do vi phạm chính sách nội dung.");
+    throw new Error("AI không tạo được hình ảnh.");
   } catch (e: any) {
-    if (e.message?.includes("entity was not found")) {
-      throw new Error("API Key không hợp lệ hoặc không có quyền truy cập model này.");
-    }
     throw e;
   }
 };

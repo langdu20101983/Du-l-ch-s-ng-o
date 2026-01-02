@@ -6,7 +6,7 @@ import { translations } from './translations';
 import { DestinationCard } from './components/DestinationCard';
 import { FaceUpload } from './components/FaceUpload';
 import { OutfitUpload } from './components/OutfitUpload';
-import { generateSelfie, openApiKeySelector, searchGlobalDestinations, checkApiKeyStatus } from './services/gemini';
+import { generateSelfie, openApiKeySelector, searchGlobalDestinations, checkApiKeyStatus, getCelebritySuggestions } from './services/gemini';
 
 const App: React.FC = () => {
   // Global Settings
@@ -31,6 +31,13 @@ const App: React.FC = () => {
   const [outfitStyle, setOutfitStyle] = useState<ClothingStyle>(ClothingStyle.AUTO);
   const [imageQuality, setImageQuality] = useState<ImageQuality>(ImageQuality.Q1K);
   const [celebrityName, setCelebrityName] = useState('');
+  const [celebritySuggestions, setCelebritySuggestions] = useState<string[]>([]);
+  const [isSuggestingCelebrity, setIsSuggestingCelebrity] = useState(false);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  
+  // Ref để theo dõi tên đã chọn để tránh lặp lại gợi ý ngay lập tức
+  const lastSelectedCelebrity = useRef<string>('');
+  
   const [customPrompt, setCustomPrompt] = useState('');
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>(AspectRatio.SQUARE);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -53,9 +60,29 @@ const App: React.FC = () => {
       });
   }, [selectedRegion, selectedType, searchQuery]);
 
+  // Debounce gợi ý người nổi tiếng
+  useEffect(() => {
+    const timer = setTimeout(async () => {
+      // Nếu tên hiện tại giống hệt tên vừa chọn, hoặc quá ngắn, hoặc đang tạo ảnh thì không gợi ý
+      if (celebrityName.length >= 2 && !isGenerating && celebrityName !== lastSelectedCelebrity.current) {
+        setIsSuggestingCelebrity(true);
+        const suggestions = await getCelebritySuggestions(celebrityName, lang);
+        setCelebritySuggestions(suggestions);
+        setIsSuggestingCelebrity(false);
+        // Chỉ hiển thị nếu danh sách không rỗng và người dùng vẫn đang tập trung vào ô đó
+        setShowSuggestions(suggestions.length > 0);
+      } else {
+        setCelebritySuggestions([]);
+        setShowSuggestions(false);
+      }
+    }, 400);
+
+    return () => clearTimeout(timer);
+  }, [celebrityName, lang, isGenerating]);
+
   const handleGlobalSearch = async (queryToSearch: string = searchQuery) => {
     if (!queryToSearch.trim() || isSearchingGlobal) return;
-    if (queryToSearch.trim() === lastGlobalQuery) return; // Tránh tìm kiếm trùng lặp
+    if (queryToSearch.trim() === lastGlobalQuery) return;
 
     setIsSearchingGlobal(true);
     setError(null);
@@ -74,11 +101,8 @@ const App: React.FC = () => {
     try {
       const results = await searchGlobalDestinations(queryToSearch, location);
       setGlobalResults(results);
-      if (results.length > 0) {
-        // Chỉ tự động chọn nếu chưa có địa điểm nào được chọn
-        if (!selectedDest) setSelectedDest(results[0]);
-      } else if (rankedDestinations.length === 0) {
-        setError("Không tìm thấy kết quả nào. Hãy thử từ khóa khác.");
+      if (results.length > 0 && !selectedDest) {
+        setSelectedDest(results[0]);
       }
     } catch (err: any) {
       setError(t.errorGeneral);
@@ -87,22 +111,17 @@ const App: React.FC = () => {
     }
   };
 
-  // Auto-search effect
   useEffect(() => {
-    // Reset global results if query is empty
     if (!searchQuery.trim()) {
       setGlobalResults([]);
       setLastGlobalQuery('');
       return;
     }
-
     const timer = setTimeout(() => {
-      // Trigger global search if local results are empty and query is long enough
       if (searchQuery.trim().length >= 3 && rankedDestinations.length === 0 && !isSearchingGlobal) {
         handleGlobalSearch(searchQuery);
       }
-    }, 800); // 800ms debounce
-
+    }, 800);
     return () => clearTimeout(timer);
   }, [searchQuery, rankedDestinations.length]);
 
@@ -115,17 +134,14 @@ const App: React.FC = () => {
       setError(t.errorNoFace);
       return;
     }
-
-    // Check key for Pro features
     if (imageQuality !== ImageQuality.Q1K) {
       const hasKey = await checkApiKeyStatus();
-      if (!hasKey) {
-        await openApiKeySelector();
-      }
+      if (!hasKey) await openApiKeySelector();
     }
 
     setIsGenerating(true);
     setError(null);
+    setShowSuggestions(false);
 
     try {
       const resultUrl = await generateSelfie(
@@ -138,37 +154,13 @@ const App: React.FC = () => {
         aspectRatio,
         imageQuality
       );
-
       setGeneratedResults(prev => [
-        { url: resultUrl, prompt: customPrompt || `Selfie at ${selectedDest.name}`, timestamp: Date.now() },
+        { url: resultUrl, prompt: customPrompt || `Selfie at ${selectedDest.name} with ${celebrityName}`, timestamp: Date.now() },
         ...prev
       ]);
-      
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (err: any) {
-      console.error("Generation error:", err);
-      let errorMsg = String(err.message || err).toLowerCase();
-      
-      if (errorMsg.includes("403") || errorMsg.includes("permission") || errorMsg.includes("not found")) {
-        setError(
-          <div className="text-center">
-            <p className="mb-2">{t.errorAuth}</p>
-            <button 
-              onClick={openApiKeySelector}
-              className="mt-2 text-xs bg-indigo-100 text-indigo-700 px-3 py-1 rounded-full font-bold hover:bg-indigo-200 transition-colors"
-            >
-              <i className="fa-solid fa-key mr-1"></i> {t.changeKeyBtn}
-            </button>
-          </div>
-        );
-      } else {
-        setError(
-          <div className="max-w-xs overflow-hidden">
-            <p className="font-bold text-sm mb-1">Error:</p>
-            <p className="text-[11px] leading-tight break-words">{err.message || t.errorGeneral}</p>
-          </div>
-        );
-      }
+      setError(err.message || t.errorGeneral);
     } finally {
       setIsGenerating(false);
     }
@@ -186,7 +178,6 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col md:flex-row">
-      {/* Sidebar */}
       <aside className={`fixed inset-y-0 left-0 z-50 w-80 bg-white shadow-2xl transform transition-transform duration-300 ease-in-out md:relative md:translate-x-0 ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <div className="h-full overflow-y-auto p-6 flex flex-col space-y-8">
           <div className="flex flex-col gap-4">
@@ -199,7 +190,6 @@ const App: React.FC = () => {
                 <i className="fa-solid fa-times text-xl"></i>
               </button>
             </div>
-            
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2 p-1 bg-gray-100 rounded-xl w-fit">
                 <button onClick={() => setLang('vi')} className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${lang === 'vi' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-400'}`}>VN</button>
@@ -245,15 +235,52 @@ const App: React.FC = () => {
                   {Object.values(ImageQuality).map(q => <option key={q} value={q}>{t.qualityLabels[q]}</option>)}
                 </select>
               </div>
+              <div className="relative">
+                <label className="block text-sm font-medium text-gray-700 mb-1">{t.selfieWithLabel}</label>
+                <div className="relative">
+                  <input 
+                    type="text" 
+                    placeholder={t.selfieWithPlaceholder} 
+                    className="w-full px-4 py-2 rounded-xl bg-gray-50 border border-gray-200 outline-none focus:ring-2 focus:ring-indigo-500/20 pr-10" 
+                    value={celebrityName} 
+                    onChange={(e) => {
+                      setCelebrityName(e.target.value);
+                      // Khi người dùng gõ phím, reset tên đã chọn để cho phép gợi ý lại
+                      lastSelectedCelebrity.current = '';
+                    }}
+                    onFocus={() => celebritySuggestions.length > 0 && celebrityName !== lastSelectedCelebrity.current && setShowSuggestions(true)}
+                  />
+                  {isSuggestingCelebrity && (
+                    <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                      <i className="fa-solid fa-circle-notch animate-spin text-indigo-400 text-xs"></i>
+                    </div>
+                  )}
+                </div>
+                {showSuggestions && (
+                  <div className="absolute z-50 w-full mt-1 bg-white border border-gray-100 rounded-xl shadow-xl overflow-hidden animate-in fade-in slide-in-from-top-2">
+                    {celebritySuggestions.map((name, idx) => (
+                      <button 
+                        key={idx}
+                        onClick={() => {
+                          setCelebrityName(name);
+                          lastSelectedCelebrity.current = name; // Lưu tên đã chọn
+                          setShowSuggestions(false);
+                          setCelebritySuggestions([]);
+                        }}
+                        className="w-full text-left px-4 py-2.5 text-sm hover:bg-indigo-50 transition-colors flex items-center justify-between group"
+                      >
+                        <span className="font-medium text-gray-700">{name}</span>
+                        <i className="fa-solid fa-arrow-right text-[10px] text-gray-300 group-hover:text-indigo-400"></i>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">{t.aspectRatioLabel}</label>
                 <select className="w-full px-4 py-2 rounded-xl bg-gray-50 border border-gray-200 outline-none text-sm" value={aspectRatio} onChange={(e) => setAspectRatio(e.target.value as AspectRatio)}>
                   {Object.values(AspectRatio).map(ratio => <option key={ratio} value={ratio}>{ratio} - {t.ratioLabels[ratio]}</option>)}
                 </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">{t.selfieWithLabel}</label>
-                <input type="text" placeholder={t.selfieWithPlaceholder} className="w-full px-4 py-2 rounded-xl bg-gray-50 border border-gray-200 outline-none" value={celebrityName} onChange={(e) => setCelebrityName(e.target.value)} />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">{t.customPromptLabel}</label>
@@ -271,8 +298,7 @@ const App: React.FC = () => {
         </div>
       </aside>
 
-      {/* Main Explorer */}
-      <main className="flex-1 p-4 md:p-8 overflow-y-auto max-h-screen">
+      <main className="flex-1 p-4 md:p-8 overflow-y-auto max-h-screen" onClick={() => setShowSuggestions(false)}>
         <div className="md:hidden flex items-center justify-between mb-6">
           <h1 className="text-xl font-black text-indigo-600 tracking-tight">{t.appName}</h1>
           <button onClick={() => setIsSidebarOpen(true)} className="p-2 bg-indigo-100 text-indigo-600 rounded-lg"><i className="fa-solid fa-bars"></i></button>
@@ -301,7 +327,7 @@ const App: React.FC = () => {
             <div className="flex flex-col sm:flex-row gap-3">
               <div className="relative flex-1">
                 <i className="fa-solid fa-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 text-gray-400"></i>
-                <input type="text" placeholder={t.searchPlaceholder} className="w-full pl-12 pr-4 py-3 bg-white border border-gray-200 rounded-2xl shadow-sm outline-none" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
+                <input type="text" placeholder={t.searchPlaceholder} className="w-full pl-12 pr-4 py-3 bg-white border border-gray-200 rounded-2xl shadow-sm outline-none focus:ring-2 focus:ring-indigo-500/20" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} />
                 {isSearchingGlobal && (
                    <div className="absolute right-4 top-1/2 -translate-y-1/2">
                      <i className="fa-solid fa-circle-notch animate-spin text-indigo-500"></i>
@@ -330,7 +356,6 @@ const App: React.FC = () => {
           </div>
         </div>
 
-        {/* Dynamic Global Results */}
         {(globalResults.length > 0 || isSearchingGlobal) && (
           <section className="mb-12 p-6 bg-indigo-50/50 rounded-3xl border border-indigo-100 transition-all">
             <h2 className="text-xl font-black mb-6 flex items-center gap-2 text-indigo-900">
@@ -339,13 +364,7 @@ const App: React.FC = () => {
             </h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
               {globalResults.map(dest => (
-                <DestinationCard 
-                  key={dest.id} 
-                  destination={dest} 
-                  isSelected={selectedDest?.id === dest.id} 
-                  onSelect={setSelectedDest} 
-                  t={t} 
-                />
+                <DestinationCard key={dest.id} destination={dest} isSelected={selectedDest?.id === dest.id} onSelect={setSelectedDest} t={t} />
               ))}
               {isSearchingGlobal && globalResults.length === 0 && (
                 Array(5).fill(0).map((_, i) => (
@@ -375,7 +394,6 @@ const App: React.FC = () => {
         </div>
       </main>
 
-      {/* Loading Overlay */}
       {isGenerating && (
         <div className="fixed inset-0 z-[100] glass flex items-center justify-center text-center p-6">
           <div className="max-w-md w-full">
